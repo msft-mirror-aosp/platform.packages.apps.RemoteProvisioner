@@ -68,18 +68,22 @@ public class SystemInterface {
      * Sends a generateCsr request over the binder interface. `dataBlob` is an out parameter that
      * will be populated by the underlying binder service.
      */
-    public static byte[] generateCsr(boolean testMode, int numKeys, int secLevel, GeekResponse geek,
-            ProtectedData protectedData, DeviceInfo deviceInfo,
+    public static byte[] generateCsr(boolean testMode, int numKeys, int secLevel,
+            byte[] geekChain, byte[] challenge, ProtectedData protectedData, DeviceInfo deviceInfo,
             @NonNull IRemoteProvisioning binder) {
         try {
             ProtectedData dataBundle = new ProtectedData();
             byte[] macedPublicKeys = binder.generateCsr(testMode,
                                                         numKeys,
-                                                        geek.geek,
-                                                        geek.challenge,
+                                                        geekChain,
+                                                        challenge,
                                                         secLevel,
                                                         protectedData,
                                                         deviceInfo);
+            if (macedPublicKeys == null) {
+                Log.e(TAG, "Keystore didn't generate a CSR successfully.");
+                return null;
+            }
             ByteArrayInputStream bais = new ByteArrayInputStream(macedPublicKeys);
             List<DataItem> dataItems = new CborDecoder(bais).decode();
             List<DataItem> macInfo = ((Array) dataItems.get(0)).getDataItems();
