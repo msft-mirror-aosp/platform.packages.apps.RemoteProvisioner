@@ -29,23 +29,17 @@ import android.security.remoteprovisioning.IRemoteProvisioning;
 import android.util.Log;
 
 import com.android.remoteprovisioner.GeekResponse;
-import com.android.remoteprovisioner.PeriodicProvisioner;
+import com.android.remoteprovisioner.Provisioner;
 import com.android.remoteprovisioner.ServerInterface;
-
-import java.time.Duration;
-import java.util.concurrent.locks.ReentrantLock;
+import com.android.remoteprovisioner.SettingsManager;
 
 /**
  * Provides the implementation for IGenerateKeyService.aidl
  */
 public class GenerateRkpKeyService extends Service {
     private static final int KEY_GENERATION_PAUSE_MS = 1000;
-    private static final Duration LOOKAHEAD_TIME = Duration.ofDays(1);
-
     private static final String SERVICE = "android.security.remoteprovisioning";
     private static final String TAG = "RemoteProvisioningService";
-
-    private static final ReentrantLock sLock = new ReentrantLock();
 
     @Override
     public void onCreate() {
@@ -61,7 +55,6 @@ public class GenerateRkpKeyService extends Service {
         @Override
         public void generateKey(int securityLevel) {
             try {
-                Log.i(TAG, "generateKey ping for secLevel: " + securityLevel);
                 IRemoteProvisioning binder =
                         IRemoteProvisioning.Stub.asInterface(ServiceManager.getService(SERVICE));
                 checkAndFillPool(binder, securityLevel);
@@ -73,7 +66,6 @@ public class GenerateRkpKeyService extends Service {
         @Override
         public void notifyKeyGenerated(int securityLevel) {
             try {
-                Log.i(TAG, "Notify key generated ping for secLevel: " + securityLevel);
                 IRemoteProvisioning binder =
                         IRemoteProvisioning.Stub.asInterface(ServiceManager.getService(SERVICE));
                 checkAndFillPool(binder, securityLevel);
@@ -84,46 +76,41 @@ public class GenerateRkpKeyService extends Service {
 
         private void checkAndFillPool(IRemoteProvisioning binder, int secLevel)
                 throws RemoteException {
-            // No need to hammer the pool check with a ton of redundant requests.
-            if (!sLock.tryLock()) {
-                Log.i(TAG, "Exiting check; another process already started the check.");
-                return;
+            AttestationPoolStatus pool =
+                    binder.getPoolStatus(System.currentTimeMillis(), secLevel);
+            ImplInfo[] implInfos = binder.getImplementationInfo();
+            int curve = 0;
+            for (int i = 0; i < implInfos.length; i++) {
+                if (implInfos[i].secLevel == secLevel) {
+                    curve = implInfos[i].supportedCurve;
+                    break;
+                }
             }
-            try {
-                AttestationPoolStatus pool =
-                        binder.getPoolStatus(System.currentTimeMillis(), secLevel);
-                ImplInfo[] implInfos = binder.getImplementationInfo();
-                int curve = 0;
-                for (int i = 0; i < implInfos.length; i++) {
-                    if (implInfos[i].secLevel == secLevel) {
-                        curve = implInfos[i].supportedCurve;
-                        break;
-                    }
-                }
-
+            // If there are no unassigned keys, go ahead and provision some. If there are no
+            // attested keys at all on the system, this implies that it is a hybrid
+            // rkp/factory-provisioned system that has turned off RKP. In that case, do
+            // not provision.
+            if (pool.unassigned == 0 && pool.attested != 0) {
+                Log.i(TAG, "All signed keys are currently in use, provisioning more.");
                 Context context = getApplicationContext();
-                int keysToProvision =
-                        PeriodicProvisioner.generateNumKeysNeeded(binder, context,
-                                                                  LOOKAHEAD_TIME.toMillis(),
-                                                                  secLevel);
-                // If there are no unassigned keys, go ahead and provision some. If there are no
-                // attested keys at all on the system, this implies that it is a hybrid
-                // rkp/factory-provisioned system that has turned off RKP. In that case, do
-                // not provision.
-                if (keysToProvision != 0 && pool.attested != 0) {
-                    Log.i(TAG, "All signed keys are currently in use, provisioning more.");
-                    GeekResponse resp = ServerInterface.fetchGeek(context);
-                    if (resp == null) {
-                        Log.e(TAG, "Server unavailable");
-                        return;
+                int keysToProvision = SettingsManager.getExtraSignedKeysAvailable(context);
+                int existingUnsignedKeys = pool.total - pool.attested;
+                int keysToGenerate = keysToProvision - existingUnsignedKeys;
+                try {
+                    for (int i = 0; i < keysToGenerate; i++) {
+                        binder.generateKeyPair(false /* isTestMode */, secLevel);
+                        Thread.sleep(KEY_GENERATION_PAUSE_MS);
                     }
-                    PeriodicProvisioner.batchProvision(binder, context, keysToProvision, secLevel,
-                                                     resp.getGeekChain(curve), resp.getChallenge());
+                } catch (InterruptedException e) {
+                    Log.i(TAG, "Thread interrupted", e);
                 }
-            } catch (InterruptedException e) {
-                Log.e(TAG, "Provisioner thread interrupted.", e);
-            } finally {
-                sLock.unlock();
+                GeekResponse resp = ServerInterface.fetchGeek(context);
+                if (resp == null) {
+                    Log.e(TAG, "Server unavailable");
+                    return;
+                }
+                Provisioner.provisionCerts(keysToProvision, secLevel, resp.getGeekChain(curve),
+                                           resp.getChallenge(), binder, context);
             }
         }
     };
