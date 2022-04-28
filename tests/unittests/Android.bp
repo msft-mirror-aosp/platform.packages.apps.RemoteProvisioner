@@ -19,9 +19,11 @@ android_test {
     name: "RemoteProvisionerUnitTests",
     srcs: ["src/**/*.java"],
     static_libs: [
+        "Nene",
         "androidx.test.core",
         "androidx.test.rules",
         "android.security.remoteprovisioning-java",
+        "libnanohttpd",
         "platform-test-annotations",
         "ub-uiautomator",
         "cbor-java",
