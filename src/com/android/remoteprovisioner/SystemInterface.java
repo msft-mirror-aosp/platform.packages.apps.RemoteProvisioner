@@ -20,6 +20,8 @@ import android.annotation.NonNull;
 import android.hardware.security.keymint.DeviceInfo;
 import android.hardware.security.keymint.ProtectedData;
 import android.os.RemoteException;
+import android.os.ServiceSpecificException;
+import android.security.remoteprovisioning.AttestationPoolStatus;
 import android.security.remoteprovisioning.IRemoteProvisioning;
 import android.util.Log;
 
@@ -42,7 +44,7 @@ import co.nstant.in.cbor.model.DataItem;
  */
 public class SystemInterface {
 
-    private static final String TAG = "SystemInterface";
+    private static final String TAG = "RemoteProvisioner";
 
     private static byte[] makeProtectedHeaders() throws CborException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -68,18 +70,23 @@ public class SystemInterface {
      * Sends a generateCsr request over the binder interface. `dataBlob` is an out parameter that
      * will be populated by the underlying binder service.
      */
-    public static byte[] generateCsr(boolean testMode, int numKeys, int secLevel, GeekResponse geek,
-            ProtectedData protectedData, DeviceInfo deviceInfo,
+    public static byte[] generateCsr(boolean testMode, int numKeys, int secLevel,
+            byte[] geekChain, byte[] challenge, ProtectedData protectedData, DeviceInfo deviceInfo,
             @NonNull IRemoteProvisioning binder) {
         try {
+            Log.i(TAG, "Packaging " + numKeys + " keys into a CSR. Test: " + testMode);
             ProtectedData dataBundle = new ProtectedData();
             byte[] macedPublicKeys = binder.generateCsr(testMode,
                                                         numKeys,
-                                                        geek.geek,
-                                                        geek.challenge,
+                                                        geekChain,
+                                                        challenge,
                                                         secLevel,
                                                         protectedData,
                                                         deviceInfo);
+            if (macedPublicKeys == null) {
+                Log.e(TAG, "Keystore didn't generate a CSR successfully.");
+                return null;
+            }
             ByteArrayInputStream bais = new ByteArrayInputStream(macedPublicKeys);
             List<DataItem> dataItems = new CborDecoder(bais).decode();
             List<DataItem> macInfo = ((Array) dataItems.get(0)).getDataItems();
@@ -96,6 +103,9 @@ public class SystemInterface {
             return baos.toByteArray();
         } catch (RemoteException e) {
             Log.e(TAG, "Failed to generate CSR blob", e);
+            return null;
+        } catch (ServiceSpecificException e) {
+            Log.e(TAG, "Failure in Keystore or Keymint to facilitate blob generation.", e);
             return null;
         } catch (CborException e) {
             Log.e(TAG, "Failed to parse/build CBOR", e);
@@ -118,6 +128,41 @@ public class SystemInterface {
             Log.e(TAG, "Error on the binder side when attempting to provision the signed chain",
                     e);
             return false;
+        } catch (ServiceSpecificException e) {
+            Log.e(TAG, "Error on the Keystore side", e);
+            return false;
+        }
+    }
+
+    /**
+     * Returns the pool status for a given {@code secLevel}, with the expiration date configured to
+     * the value passed in as {@code expiringBy}.
+     */
+    public static AttestationPoolStatus getPoolStatus(long expiringBy,
+                                                      int secLevel,
+                                                      IRemoteProvisioning binder)
+            throws RemoteException {
+        try {
+            return binder.getPoolStatus(expiringBy, secLevel);
+        } catch (ServiceSpecificException e) {
+            Log.e(TAG, "Failure in Keystore", e);
+            throw new RemoteException(e);
+        }
+    }
+
+    /**
+     * Generates an attestation key pair.
+     *
+     * @param isTestMode Whether or not to generate a test key, which would accept any EEK later.
+     * @param secLevel Which security level to generate the key for.
+     */
+    public static void generateKeyPair(boolean isTestMode, int secLevel, IRemoteProvisioning binder)
+            throws RemoteException {
+        try {
+            binder.generateKeyPair(isTestMode, secLevel);
+        } catch (ServiceSpecificException e) {
+            Log.e(TAG, "Failure in Keystore or KeyMint.", e);
+            throw new RemoteException(e);
         }
     }
 }

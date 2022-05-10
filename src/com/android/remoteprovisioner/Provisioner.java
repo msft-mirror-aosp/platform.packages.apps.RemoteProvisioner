@@ -17,15 +17,17 @@
 package com.android.remoteprovisioner;
 
 import android.annotation.NonNull;
+import android.content.Context;
 import android.hardware.security.keymint.DeviceInfo;
 import android.hardware.security.keymint.ProtectedData;
+import android.security.IGenerateRkpKeyService;
 import android.security.remoteprovisioning.IRemoteProvisioning;
 import android.util.Log;
 
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Provides an easy package to run the provisioning process from start to finish, interfacing
@@ -36,57 +38,65 @@ public class Provisioner {
     private static final String TAG = "RemoteProvisioningService";
 
     /**
-     * Drives the process of provisioning certs. The method first contacts the provided backend
-     * server to retrieve an Endpoing Encryption Key with an accompanying certificate chain and a
-     * challenge. It passes this data and the requested number of keys to the remote provisioning
-     * system backend, which then works with KeyMint in order to get a CSR bundle generated, along
-     * with an encrypted package containing metadata that the server needs in order to make
-     * decisions about provisioning.
+     * Drives the process of provisioning certs. The method passes the data fetched from the
+     * provisioning server along with the requested number of keys to the remote provisioning
+     * system backend. The backend will talk to the underlying IRemotelyProvisionedComponent
+     * interface in order to get a CSR bundle generated, along with an encrypted package containing
+     * metadata that the server needs in order to make decisions about provisioning.
      *
      * This method then passes that bundle back out to the server backend, waits for the response,
      * and, if successful, passes the certificate chains back to the remote provisioning service to
      * be stored and later assigned to apps requesting a key attestation.
      *
      * @param numKeys The number of keys to be signed. The service will do a best-effort to
-     *                     provision the number requested, but if the number requested is larger
-     *                     than the number of unsigned attestation key pairs available, it will
-     *                     only sign the number that is available at time of calling.
-     *
+     *                provision the number requested, but if the number requested is larger
+     *                than the number of unsigned attestation key pairs available, it will
+     *                only sign the number that is available at time of calling.
      * @param secLevel Which KM instance should be used to provision certs.
+     * @param geekChain The certificate chain that signs the endpoint encryption key.
+     * @param challenge A server provided challenge to ensure freshness of the response.
      * @param binder The IRemoteProvisioning binder interface needed by the method to handle talking
-     *                     to the remote provisioning system component.
-     *
-     * @return True if certificates were successfully provisioned for the signing keys.
+     *               to the remote provisioning system component.
+     * @param context The application context object which enables this method to make use of
+     *                SettingsManager.
+     * @return The number of certificates provisioned. Ideally, this should equal {@code numKeys}.
      */
-    public static boolean provisionCerts(int numKeys, int secLevel,
-            @NonNull IRemoteProvisioning binder) {
+    public static int provisionCerts(int numKeys, int secLevel, byte[] geekChain, byte[] challenge,
+            @NonNull IRemoteProvisioning binder, Context context) throws
+            RemoteProvisioningException {
+        Log.i(TAG, "Request for " + numKeys + " keys to be provisioned.");
         if (numKeys < 1) {
-            Log.e(TAG, "Request at least 1 key to be signed. Num requested: " + numKeys);
-            return false;
-        }
-        GeekResponse geek = ServerInterface.fetchGeek();
-        if (geek == null) {
-            Log.e(TAG, "The geek is null");
-            return false;
+            throw new RemoteProvisioningException(IGenerateRkpKeyService.Status.INTERNAL_ERROR,
+                    "Request at least 1 key to be signed. Num requested: " + numKeys);
         }
         DeviceInfo deviceInfo = new DeviceInfo();
         ProtectedData protectedData = new ProtectedData();
-        byte[] macedKeysToSign =
-                SystemInterface.generateCsr(false /* testMode */, numKeys, secLevel, geek,
-                                            protectedData, deviceInfo, binder);
+        byte[] macedKeysToSign = SystemInterface.generateCsr(SettingsManager.isTestMode(), numKeys,
+                secLevel, geekChain, challenge, protectedData, deviceInfo, binder);
         if (macedKeysToSign == null || protectedData.protectedData == null
                 || deviceInfo.deviceInfo == null) {
-            Log.e(TAG, "Keystore failed to generate a payload");
-            return false;
+            throw new RemoteProvisioningException(IGenerateRkpKeyService.Status.INTERNAL_ERROR,
+                    "Keystore failed to generate a payload");
         }
         byte[] certificateRequest =
                 CborUtils.buildCertificateRequest(deviceInfo.deviceInfo,
-                                                  geek.challenge,
+                                                  challenge,
                                                   protectedData.protectedData,
                                                   macedKeysToSign);
-        ArrayList<byte[]> certChains =
-                new ArrayList<byte[]>(ServerInterface.requestSignedCertificates(
-                        certificateRequest, geek.challenge));
+        if (certificateRequest == null) {
+            throw new RemoteProvisioningException(IGenerateRkpKeyService.Status.INTERNAL_ERROR,
+                    "Failed to serialize the payload generated by keystore.");
+        }
+        List<byte[]> certChains = ServerInterface.requestSignedCertificates(context,
+                        certificateRequest, challenge);
+        if (certChains == null) {
+            // This is marked as an internal error, because ServerInterface should never return
+            // null, and if it does it's indicative of a bug.
+            throw new RemoteProvisioningException(IGenerateRkpKeyService.Status.INTERNAL_ERROR,
+                    "Server response failed on provisioning attempt.");
+        }
+        Log.i(TAG, "Received " + certChains.size() + " certificate chains from the server.");
+        int provisioned = 0;
         for (byte[] certChain : certChains) {
             // DER encoding specifies leaf to root ordering. Pull the public key and expiration
             // date from the leaf.
@@ -94,22 +104,37 @@ public class Provisioner {
             try {
                 cert = X509Utils.formatX509Certs(certChain)[0];
             } catch (CertificateException e) {
-                Log.e(TAG, "Failed to interpret DER encoded certificate chain", e);
-                return false;
+                throw new RemoteProvisioningException(IGenerateRkpKeyService.Status.INTERNAL_ERROR,
+                        "Failed to interpret DER encoded certificate chain", e);
             }
             // getTime returns the time in *milliseconds* since the epoch.
             long expirationDate = cert.getNotAfter().getTime();
             byte[] rawPublicKey = X509Utils.getAndFormatRawPublicKey(cert);
+            if (rawPublicKey == null) {
+                Log.e(TAG, "Skipping malformed public key.");
+                continue;
+            }
             try {
-                return SystemInterface.provisionCertChain(rawPublicKey, cert.getEncoded(),
-                                                          certChain, expirationDate, secLevel,
-                                                          binder);
+                if (SystemInterface.provisionCertChain(rawPublicKey, cert.getEncoded(), certChain,
+                                                       expirationDate, secLevel, binder)) {
+                    provisioned++;
+                }
             } catch (CertificateEncodingException e) {
-                Log.e(TAG, "Somehow can't re-encode the decoded batch cert...", e);
-                return false;
+                throw new RemoteProvisioningException(IGenerateRkpKeyService.Status.INTERNAL_ERROR,
+                        "Error re-encoding the decoded batch cert", e);
             }
         }
-        Log.d(TAG, "Reaching this return statement implies the server returned 0 signed certs.");
-        return false;
+
+        // In lieu of metrics, do our best to spot when things are "going really badly" by looking
+        // for edge cases where fewer than half of the key requests succeed. In the future, we
+        // should add metrics to get a picture of how healthy this process is.
+        if (provisioned < (numKeys / 2)) {
+            throw new RemoteProvisioningException(IGenerateRkpKeyService.Status.INTERNAL_ERROR,
+                    "Requested " + numKeys + " keys, provisioned " + provisioned);
+        }
+
+        Log.i(TAG, "In provisionCerts: Requested " + numKeys + " keys. "
+                   + provisioned + " were provisioned.");
+        return provisioned;
     }
 }
