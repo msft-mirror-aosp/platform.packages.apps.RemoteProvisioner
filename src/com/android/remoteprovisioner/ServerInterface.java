@@ -16,6 +16,10 @@
 
 package com.android.remoteprovisioner;
 
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
+import android.security.IGenerateRkpKeyService;
 import android.util.Base64;
 import android.util.Log;
 
@@ -33,66 +37,72 @@ import java.util.List;
  */
 public class ServerInterface {
 
-    private static final int TIMEOUT_MS = 5000;
+    private static final int TIMEOUT_MS = 20000;
 
     private static final String TAG = "ServerInterface";
-    private static final String PROVISIONING_URL = "https://remoteprovisioning.googleapis.com";
-    private static final String GEEK_URL = PROVISIONING_URL + "/v1alpha1:fetchEekChain";
-    private static final String CERTIFICATE_SIGNING_URL =
-            PROVISIONING_URL + "/v1alpha1:signCertificates?challenge=";
+    private static final String GEEK_URL = ":fetchEekChain";
+    private static final String CERTIFICATE_SIGNING_URL = ":signCertificates?challenge=";
 
     /**
      * Ferries the CBOR blobs returned by KeyMint to the provisioning server. The data sent to the
      * provisioning server contains the MAC'ed CSRs and encrypted bundle containing the MAC key and
      * the hardware unique public key.
      *
+     * @param context The application context which is required to use SettingsManager.
      * @param csr The CBOR encoded data containing the relevant pieces needed for the server to
      *                    sign the CSRs. The data encoded within comes from Keystore / KeyMint.
-     *
      * @param challenge The challenge that was sent from the server. It is included here even though
      *                    it is also included in `cborBlob` in order to allow the server to more
      *                    easily reject bad requests.
-     *
      * @return A List of byte arrays, where each array contains an entire DER-encoded certificate
      *                    chain for one attestation key pair.
      */
-    public static List<byte[]> requestSignedCertificates(byte[] csr, byte[] challenge) {
+    public static List<byte[]> requestSignedCertificates(Context context, byte[] csr,
+                                                         byte[] challenge) throws
+            RemoteProvisioningException {
+        checkDataBudget(context);
+        int bytesTransacted = 0;
         try {
-            URL url = new URL(CERTIFICATE_SIGNING_URL
-                        + Base64.encodeToString(challenge, Base64.URL_SAFE));
+            URL url = new URL(SettingsManager.getUrl(context) + CERTIFICATE_SIGNING_URL
+                              + Base64.encodeToString(challenge, Base64.URL_SAFE));
             HttpURLConnection con = (HttpURLConnection) url.openConnection();
             con.setRequestMethod("POST");
             con.setDoOutput(true);
             con.setConnectTimeout(TIMEOUT_MS);
+            con.setReadTimeout(TIMEOUT_MS);
 
             // May not be able to use try-with-resources here if the connection gets closed due to
             // the output stream being automatically closed.
             try (OutputStream os = con.getOutputStream()) {
                 os.write(csr, 0, csr.length);
-            } catch (Exception e) {
-                return null;
+                bytesTransacted += csr.length;
             }
 
             if (con.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                int failures = SettingsManager.incrementFailureCounter(context);
                 Log.e(TAG, "Server connection for signing failed, response code: "
-                        + con.getResponseCode());
-                return null;
+                        + con.getResponseCode() + "\nRepeated failure count: " + failures);
+                SettingsManager.consumeErrDataBudget(context, bytesTransacted);
+                throw RemoteProvisioningException.createFromHttpError(con.getResponseCode());
             }
+            SettingsManager.clearFailureCounter(context);
             BufferedInputStream inputStream = new BufferedInputStream(con.getInputStream());
             ByteArrayOutputStream cborBytes = new ByteArrayOutputStream();
             byte[] buffer = new byte[1024];
             int read = 0;
             while ((read = inputStream.read(buffer, 0, buffer.length)) != -1) {
                 cborBytes.write(buffer, 0, read);
+                bytesTransacted += read;
             }
             return CborUtils.parseSignedCertificates(cborBytes.toByteArray());
         } catch (SocketTimeoutException e) {
             Log.e(TAG, "Server timed out", e);
-            return null;
         } catch (IOException e) {
             Log.e(TAG, "Failed to request signed certificates from the server", e);
-            return null;
         }
+        SettingsManager.incrementFailureCounter(context);
+        SettingsManager.consumeErrDataBudget(context, bytesTransacted);
+        throw makeNetworkError(context, "Error getting CSR signed.");
     }
 
     /**
@@ -103,19 +113,35 @@ public class ServerInterface {
      *
      * A challenge is also returned from the server so that it can check freshness of the follow-up
      * request to get keys signed.
+     *
+     * @param context The application context which is required to use SettingsManager.
+     * @return A GeekResponse object which optionally contains configuration data.
      */
-    public static GeekResponse fetchGeek() {
+    public static GeekResponse fetchGeek(Context context) throws RemoteProvisioningException {
+        checkDataBudget(context);
+        int bytesTransacted = 0;
         try {
-            URL url = new URL(GEEK_URL);
+            URL url = new URL(SettingsManager.getUrl(context) + GEEK_URL);
             HttpURLConnection con = (HttpURLConnection) url.openConnection();
-            con.setRequestMethod("GET");
+            con.setRequestMethod("POST");
             con.setConnectTimeout(TIMEOUT_MS);
+            con.setReadTimeout(TIMEOUT_MS);
+            con.setDoOutput(true);
+
+            byte[] config = CborUtils.buildProvisioningInfo(context);
+            try (OutputStream os = con.getOutputStream()) {
+                os.write(config, 0, config.length);
+                bytesTransacted += config.length;
+            }
 
             if (con.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                int failures = SettingsManager.incrementFailureCounter(context);
                 Log.e(TAG, "Server connection for GEEK failed, response code: "
-                        + con.getResponseCode());
-                return null;
+                        + con.getResponseCode() + "\nRepeated failure count: " + failures);
+                SettingsManager.consumeErrDataBudget(context, bytesTransacted);
+                throw RemoteProvisioningException.createFromHttpError(con.getResponseCode());
             }
+            SettingsManager.clearFailureCounter(context);
 
             BufferedInputStream inputStream = new BufferedInputStream(con.getInputStream());
             ByteArrayOutputStream cborBytes = new ByteArrayOutputStream();
@@ -123,14 +149,44 @@ public class ServerInterface {
             int read = 0;
             while ((read = inputStream.read(buffer, 0, buffer.length)) != -1) {
                 cborBytes.write(buffer, 0, read);
+                bytesTransacted += read;
             }
             inputStream.close();
-            return CborUtils.parseGeekResponse(cborBytes.toByteArray());
+            GeekResponse resp = CborUtils.parseGeekResponse(cborBytes.toByteArray());
+            if (resp == null) {
+                throw new RemoteProvisioningException(
+                        IGenerateRkpKeyService.Status.HTTP_SERVER_ERROR,
+                        "Response failed to parse.");
+            }
+            return resp;
         } catch (SocketTimeoutException e) {
             Log.e(TAG, "Server timed out", e);
         } catch (IOException e) {
+            // This exception will trigger on a completely malformed URL.
             Log.e(TAG, "Failed to fetch GEEK from the servers.", e);
         }
-        return null;
+        SettingsManager.incrementFailureCounter(context);
+        SettingsManager.consumeErrDataBudget(context, bytesTransacted);
+        throw makeNetworkError(context, "Error fetching GEEK");
+    }
+
+    private static void checkDataBudget(Context context) throws RemoteProvisioningException {
+        if (!SettingsManager.hasErrDataBudget(context, null /* curTime */)) {
+            int bytesConsumed = SettingsManager.getErrDataBudgetConsumed(context);
+            throw makeNetworkError(context,
+                    "Out of data budget due to repeated errors. Consumed "
+                    + bytesConsumed + " bytes.");
+        }
+    }
+
+    private static RemoteProvisioningException makeNetworkError(Context context, String message) {
+        ConnectivityManager cm = context.getSystemService(ConnectivityManager.class);
+        NetworkInfo networkInfo = cm.getActiveNetworkInfo();
+        if (networkInfo != null && networkInfo.isConnected()) {
+            return new RemoteProvisioningException(
+                    IGenerateRkpKeyService.Status.NETWORK_COMMUNICATION_ERROR, message);
+        }
+        return new RemoteProvisioningException(
+                IGenerateRkpKeyService.Status.NO_NETWORK_CONNECTIVITY, message);
     }
 }
