@@ -19,7 +19,6 @@ package com.android.remoteprovisioner;
 import static java.lang.Math.min;
 
 import android.content.Context;
-import android.net.ConnectivityManager;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.security.remoteprovisioning.AttestationPoolStatus;
@@ -28,7 +27,6 @@ import android.security.remoteprovisioning.ImplInfo;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
-import androidx.work.ListenableWorker.Result;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 
@@ -46,9 +44,6 @@ public class PeriodicProvisioner extends Worker {
 
     // How long to wait in between key pair generations to avoid flooding keystore with requests.
     private static final Duration KEY_GENERATION_PAUSE = Duration.ofMillis(1000);
-
-    // If the connection is metered when the job service is started, try to avoid provisioning.
-    private static final long METERED_CONNECTION_EXPIRATION_CHECK = Duration.ofDays(1).toMillis();
 
     private static final String SERVICE = "android.security.remoteprovisioning";
     private static final String TAG = "RemoteProvisioningService";
@@ -72,21 +67,6 @@ public class PeriodicProvisioner extends Worker {
                 Log.e(TAG, "Binder returned null pointer to RemoteProvisioning service.");
                 return Result.failure();
             }
-
-            ConnectivityManager cm = (ConnectivityManager) mContext.getSystemService(
-                    Context.CONNECTIVITY_SERVICE);
-            boolean isMetered = cm.isActiveNetworkMetered();
-            Log.i(TAG, "Connection is metered: " + isMetered);
-            long expiringBy;
-            if (isMetered) {
-                // Check a shortened duration to attempt to avoid metered connection
-                // provisioning.
-                expiringBy = System.currentTimeMillis() + METERED_CONNECTION_EXPIRATION_CHECK;
-            } else {
-                expiringBy = SettingsManager.getExpiringBy(mContext)
-                                                  .plusMillis(System.currentTimeMillis())
-                                                  .toMillis();
-            }
             ImplInfo[] implInfos = binder.getImplementationInfo();
             if (implInfos == null) {
                 Log.e(TAG, "No instances of IRemotelyProvisionedComponent registered in "
@@ -94,41 +74,27 @@ public class PeriodicProvisioner extends Worker {
                 return Result.failure();
             }
             int[] keysNeededForSecLevel = new int[implInfos.length];
-            boolean provisioningNeeded =
-                    isProvisioningNeeded(binder, expiringBy, implInfos, keysNeededForSecLevel);
             GeekResponse resp = null;
-            if (!provisioningNeeded) {
-                if (!isMetered) {
-                    // So long as the connection is unmetered, go ahead and grab an updated
-                    // device configuration file.
-                    resp = ServerInterface.fetchGeek(mContext);
-                    if (!checkGeekResp(resp)) {
-                        return Result.failure();
-                    }
-                    SettingsManager.setDeviceConfig(mContext,
-                            resp.numExtraAttestationKeys,
-                            resp.timeToRefresh,
-                            resp.provisioningUrl);
-                    if (resp.numExtraAttestationKeys == 0) {
-                        binder.deleteAllKeys();
-                    }
+            if (SettingsManager.getExtraSignedKeysAvailable(mContext) == 0) {
+                // Provisioning has been purposefully disabled in the past. Go ahead and grab
+                // an EEK just to see if provisioning should resume.
+                resp = fetchGeekAndUpdate(binder);
+                if (resp.numExtraAttestationKeys == 0) {
+                    return Result.success();
                 }
+            }
+            boolean provisioningNeeded =
+                    isProvisioningNeeded(binder,
+                                         SettingsManager.getExpirationTime(mContext).toEpochMilli(),
+                                         implInfos, keysNeededForSecLevel);
+            if (!provisioningNeeded) {
                 return Result.success();
             }
-            resp = ServerInterface.fetchGeek(mContext);
-            if (!checkGeekResp(resp)) {
-                return Result.failure();
-            }
-            SettingsManager.setDeviceConfig(mContext,
-                        resp.numExtraAttestationKeys,
-                        resp.timeToRefresh,
-                        resp.provisioningUrl);
-
+            // Resp may already be populated in the extremely rare case that this job is executing
+            // to resume provisioning for the first time after a server-induced RKP shutdown. Grab
+            // a fresh response anyways to refresh the challenge.
+            resp = fetchGeekAndUpdate(binder);
             if (resp.numExtraAttestationKeys == 0) {
-                // Provisioning is disabled. Check with the server if it's time to turn it back
-                // on. If not, quit. Avoid checking if the connection is metered. Opt instead
-                // to just continue using the fallback factory provisioned key.
-                binder.deleteAllKeys();
                 return Result.success();
             }
             for (int i = 0; i < implInfos.length; i++) {
@@ -145,13 +111,40 @@ public class PeriodicProvisioner extends Worker {
         } catch (InterruptedException e) {
             Log.e(TAG, "Provisioner thread interrupted.", e);
             return Result.failure();
+        } catch (RemoteProvisioningException e) {
+            Log.e(TAG, "Encountered RemoteProvisioningException", e);
+            if (SettingsManager.getFailureCounter(mContext) > FAILURE_MAXIMUM) {
+                Log.e(TAG, "Too many failures, resetting defaults.");
+                SettingsManager.resetDefaultConfig(mContext);
+            }
+            return Result.failure();
         }
+    }
+
+    /**
+     * Fetch a GEEK from the server and update SettingsManager appropriately with the return
+     * values. This will also delete all keys in the attestation key pool if the server has
+     * indicated that RKP should be turned off.
+     */
+    private GeekResponse fetchGeekAndUpdate(IRemoteProvisioning binder)
+            throws RemoteException, RemoteProvisioningException {
+        GeekResponse resp = ServerInterface.fetchGeek(mContext);
+        SettingsManager.setDeviceConfig(mContext,
+                    resp.numExtraAttestationKeys,
+                    resp.timeToRefresh,
+                    resp.provisioningUrl);
+
+        if (resp.numExtraAttestationKeys == 0) {
+            // The server has indicated that provisioning is disabled.
+            binder.deleteAllKeys();
+        }
+        return resp;
     }
 
     public static void batchProvision(IRemoteProvisioning binder, Context context,
                                int keysToProvision, int secLevel,
                                byte[] geekChain, byte[] challenge)
-                               throws RemoteException {
+            throws RemoteException, RemoteProvisioningException {
         while (keysToProvision != 0) {
             int batchSize = min(keysToProvision, SAFE_CSR_BATCH_SIZE);
             Log.i(TAG, "Requesting " + batchSize + " keys to be provisioned.");
@@ -163,18 +156,6 @@ public class PeriodicProvisioner extends Worker {
                                        context);
             keysToProvision -= batchSize;
         }
-    }
-
-    private boolean checkGeekResp(GeekResponse resp) {
-        if (resp == null) {
-            Log.e(TAG, "Failed to get a response from the server.");
-            if (SettingsManager.getFailureCounter(mContext) > FAILURE_MAXIMUM) {
-                Log.e(TAG, "Too many failures, resetting defaults.");
-                SettingsManager.clearPreferences(mContext);
-            }
-            return false;
-        }
-        return true;
     }
 
     private boolean isProvisioningNeeded(
