@@ -19,6 +19,7 @@ package com.android.remoteprovisioner;
 import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
+import android.net.TrafficStats;
 import android.security.IGenerateRkpKeyService;
 import android.util.Base64;
 import android.util.Log;
@@ -59,6 +60,7 @@ public class ServerInterface {
      */
     public static List<byte[]> requestSignedCertificates(Context context, byte[] csr,
             byte[] challenge, ProvisionerMetrics metrics) throws RemoteProvisioningException {
+        TrafficStats.setThreadStatsTag(0);
         checkDataBudget(context, metrics);
         int bytesTransacted = 0;
         try (ProvisionerMetrics.StopWatch serverWaitTimer = metrics.startServerWait()) {
@@ -133,6 +135,7 @@ public class ServerInterface {
      */
     public static GeekResponse fetchGeek(Context context,
             ProvisionerMetrics metrics) throws RemoteProvisioningException {
+        TrafficStats.setThreadStatsTag(0);
         checkDataBudget(context, metrics);
         int bytesTransacted = 0;
         try {
