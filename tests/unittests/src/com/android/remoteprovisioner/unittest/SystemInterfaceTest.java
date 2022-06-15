@@ -36,15 +36,25 @@ import android.platform.test.annotations.Presubmit;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.remoteprovisioning.IRemoteProvisioning;
 
-import androidx.test.core.app.ApplicationProvider;
 import androidx.test.runner.AndroidJUnit4;
 
-import com.android.remoteprovisioner.ProvisionerMetrics;
+import com.android.remoteprovisioner.CborUtils;
 import com.android.remoteprovisioner.SystemInterface;
 import com.android.remoteprovisioner.X509Utils;
 
 import com.google.crypto.tink.subtle.Hkdf;
 import com.google.crypto.tink.subtle.X25519;
+
+import co.nstant.in.cbor.CborBuilder;
+import co.nstant.in.cbor.CborDecoder;
+import co.nstant.in.cbor.CborEncoder;
+import co.nstant.in.cbor.model.Array;
+import co.nstant.in.cbor.model.ByteString;
+import co.nstant.in.cbor.model.DataItem;
+import co.nstant.in.cbor.model.MajorType;
+import co.nstant.in.cbor.model.Map;
+import co.nstant.in.cbor.model.NegativeInteger;
+import co.nstant.in.cbor.model.UnsignedInteger;
 
 import org.junit.After;
 import org.junit.Before;
@@ -59,8 +69,6 @@ import java.security.KeyStore;
 import java.security.PublicKey;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
@@ -68,17 +76,6 @@ import java.util.Random;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-
-import co.nstant.in.cbor.CborBuilder;
-import co.nstant.in.cbor.CborDecoder;
-import co.nstant.in.cbor.CborEncoder;
-import co.nstant.in.cbor.model.Array;
-import co.nstant.in.cbor.model.ByteString;
-import co.nstant.in.cbor.model.DataItem;
-import co.nstant.in.cbor.model.MajorType;
-import co.nstant.in.cbor.model.Map;
-import co.nstant.in.cbor.model.NegativeInteger;
-import co.nstant.in.cbor.model.UnsignedInteger;
 
 @RunWith(AndroidJUnit4.class)
 public class SystemInterfaceTest {
@@ -118,8 +115,6 @@ public class SystemInterfaceTest {
     @Presubmit
     @Test
     public void testGenerateCSR() throws Exception {
-        ProvisionerMetrics metrics = ProvisionerMetrics.createOutOfKeysAttemptMetrics(
-                ApplicationProvider.getApplicationContext(), SecurityLevel.TRUSTED_ENVIRONMENT);
         DeviceInfo deviceInfo = new DeviceInfo();
         ProtectedData encryptedBundle = new ProtectedData();
         byte[] eek = new byte[32];
@@ -128,8 +123,7 @@ public class SystemInterfaceTest {
             SystemInterface.generateCsr(true /* testMode */, 0 /* numKeys */,
                                         SecurityLevel.TRUSTED_ENVIRONMENT,
                                         generateEekChain(eek),
-                                        new byte[] {0x02}, encryptedBundle, deviceInfo, mBinder,
-                                        metrics);
+                                        new byte[] {0x02}, encryptedBundle, deviceInfo, mBinder);
         // encryptedBundle should contain a COSE_Encrypt message
         ByteArrayInputStream bais = new ByteArrayInputStream(encryptedBundle.protectedData);
         List<DataItem> dataItems = new CborDecoder(bais).decode();
@@ -157,8 +151,6 @@ public class SystemInterfaceTest {
     @Presubmit
     @Test
     public void testGenerateCSRProvisionAndUseKey() throws Exception {
-        ProvisionerMetrics metrics = ProvisionerMetrics.createOutOfKeysAttemptMetrics(
-                ApplicationProvider.getApplicationContext(), SecurityLevel.TRUSTED_ENVIRONMENT);
         DeviceInfo deviceInfo = new DeviceInfo();
         ProtectedData encryptedBundle = new ProtectedData();
         int numKeys = 10;
@@ -171,8 +163,7 @@ public class SystemInterfaceTest {
             SystemInterface.generateCsr(true /* testMode */, numKeys,
                                         SecurityLevel.TRUSTED_ENVIRONMENT,
                                         generateEekChain(eek),
-                                        new byte[] {0x02}, encryptedBundle, deviceInfo, mBinder,
-                                        metrics);
+                                        new byte[] {0x02}, encryptedBundle, deviceInfo, mBinder);
         assertNotNull(bundle);
         // The return value of generateCsr should be a COSE_Mac0 message
         ByteArrayInputStream bais = new ByteArrayInputStream(bundle);
@@ -206,13 +197,12 @@ public class SystemInterfaceTest {
             for (int j = 0; j < certChain[i].length; j++) {
                 os.write(certChain[i][j].getEncoded());
             }
-            Instant expiringBy = Instant.now().plusMillis(Duration.ofDays(4).toMillis());
             SystemInterface.provisionCertChain(X509Utils.getAndFormatRawPublicKey(certChain[i][0]),
                                                certChain[i][0].getEncoded() /* leafCert */,
                                                os.toByteArray() /* certChain */,
-                                               expiringBy.toEpochMilli() /* validity */,
+                                               System.currentTimeMillis() + 2000 /* validity */,
                                                SecurityLevel.TRUSTED_ENVIRONMENT,
-                                               mBinder, metrics);
+                                               mBinder);
         }
         // getPoolStatus will clean the key pool before we go to assign a new provisioned key
         mBinder.getPoolStatus(0, SecurityLevel.TRUSTED_ENVIRONMENT);
@@ -287,8 +277,6 @@ public class SystemInterfaceTest {
     public void testDecryptProtectedPayload() throws Exception {
         DeviceInfo deviceInfo = new DeviceInfo();
         ProtectedData encryptedBundle = new ProtectedData();
-        ProvisionerMetrics metrics = ProvisionerMetrics.createOutOfKeysAttemptMetrics(
-                ApplicationProvider.getApplicationContext(), SecurityLevel.TRUSTED_ENVIRONMENT);
         int numKeys = 1;
         byte[] eekPriv = X25519.generatePrivateKey();
         byte[] eekPub = X25519.publicFromPrivate(eekPriv);
@@ -297,8 +285,7 @@ public class SystemInterfaceTest {
             SystemInterface.generateCsr(true /* testMode */, numKeys,
                                         SecurityLevel.TRUSTED_ENVIRONMENT,
                                         generateEekChain(eekPub),
-                                        new byte[] {0x02}, encryptedBundle, deviceInfo, mBinder,
-                                        metrics);
+                                        new byte[] {0x02}, encryptedBundle, deviceInfo, mBinder);
         ByteArrayInputStream bais = new ByteArrayInputStream(encryptedBundle.protectedData);
         List<DataItem> dataItems = new CborDecoder(bais).decode();
         // Parse encMsg into components: protected and unprotected headers, payload, and recipient
