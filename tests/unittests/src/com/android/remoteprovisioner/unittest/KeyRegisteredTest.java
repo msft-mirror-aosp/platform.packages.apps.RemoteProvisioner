@@ -16,12 +16,14 @@
 
 package com.android.remoteprovisioner.unittest;
 
+import static android.hardware.security.keymint.SecurityLevel.STRONGBOX;
 import static android.hardware.security.keymint.SecurityLevel.TRUSTED_ENVIRONMENT;
 
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.hardware.security.keymint.DeviceInfo;
 import android.hardware.security.keymint.ProtectedData;
 import android.os.Build;
@@ -60,18 +62,27 @@ public class KeyRegisteredTest {
     private static Context sContext;
     private static IRemoteProvisioning sBinder;
     private static int sCurve;
+    private static int sCurveStrongbox;
 
     @BeforeClass
     public static void init() throws Exception {
         sContext = ApplicationProvider.getApplicationContext();
-        sBinder =
-              IRemoteProvisioning.Stub.asInterface(ServiceManager.getService(SERVICE));
+        sBinder = IRemoteProvisioning.Stub.asInterface(ServiceManager.getService(SERVICE));
         assertNotNull(sBinder);
         ImplInfo[] info = sBinder.getImplementationInfo();
         for (int i = 0; i < info.length; i++) {
             if (info[i].secLevel == TRUSTED_ENVIRONMENT) {
                 sCurve = info[i].supportedCurve;
                 break;
+            }
+        }
+
+        if (isStrongBoxSupported()) {
+            for (int i = 0; i < info.length; i++) {
+                if (info[i].secLevel == STRONGBOX) {
+                    sCurveStrongbox = info[i].supportedCurve;
+                    break;
+                }
             }
         }
     }
@@ -132,5 +143,32 @@ public class KeyRegisteredTest {
                     Status.DEVICE_NOT_REGISTERED, e.getErrorCode());
             throw e;
         }
+    }
+
+    @Test
+    public void testKeyRegisteredStrongbox() throws Exception {
+        if (!isStrongBoxSupported()) {
+            return;
+        }
+        try {
+            ProvisionerMetrics metrics = ProvisionerMetrics.createScheduledAttemptMetrics(sContext);
+            int numTestKeys = 1;
+            sBinder.generateKeyPair(SettingsManager.isTestMode(), STRONGBOX);
+            GeekResponse geek = ServerInterface.fetchGeek(sContext, metrics);
+            assertNotNull(geek);
+            requestCerts(numTestKeys, STRONGBOX, geek.getGeekChain(sCurveStrongbox),
+                         geek.getChallenge(), sBinder, sContext, metrics);
+        } catch (RemoteProvisioningException e) {
+            // Any exception will be a failure here, but specifically call out DEVICE_NOT_REGISTERED
+            // as a registration failure before throwing whatever other problem may have occurred.
+            assertNotEquals("Device isn't registered.",
+                    Status.DEVICE_NOT_REGISTERED, e.getErrorCode());
+            throw e;
+        }
+    }
+
+    private static boolean isStrongBoxSupported() {
+        return sContext.getPackageManager()
+                .hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE);
     }
 }
