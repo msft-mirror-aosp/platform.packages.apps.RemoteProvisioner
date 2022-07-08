@@ -27,6 +27,7 @@ android_test {
         "androidx.work_work-testing",
         "android.security.remoteprovisioning-java",
         "libnanohttpd",
+        "mockito-target-extended-minus-junit4",
         "platform-test-annotations",
         "ub-uiautomator",
         "cbor-java",
