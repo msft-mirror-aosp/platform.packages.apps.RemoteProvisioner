@@ -68,9 +68,13 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.ProviderException;
@@ -544,5 +548,123 @@ public class ServerToSystemTest {
             SettingsManager.clearPreferences(sContext);
             server.stop();
         }
+    }
+
+    @Test
+    public void testReadTextError() throws IOException {
+        final String error = "This is an error.  Oh No.";
+        final String[] textContentTypes = new String[] {
+                "text",
+                "text/ANYTHING",
+                "text/what-is-this; charset=unknown",
+                "text/lowercase; charset=utf-8",
+                "text/uppercase; charset=UTF-8",
+                "text/yolo; charset=ASCII"
+        };
+
+        for (String contentType: textContentTypes) {
+            HttpURLConnection connection = Mockito.mock(HttpURLConnection.class);
+            Mockito.when(connection.getContentType()).thenReturn(contentType);
+            Mockito.when(connection.getInputStream())
+                    .thenReturn(new ByteArrayInputStream(error.getBytes(StandardCharsets.UTF_8)));
+
+            Assert.assertEquals(
+                    "Failed on content type '" + contentType + "'",
+                    error,
+                    ServerInterface.readErrorFromConnection(connection));
+        }
+    }
+
+    @Test
+    public void testReadTextErrorFromErrorStream() throws IOException {
+        final String error = "Explanation for error goes here. ";
+
+        HttpURLConnection connection = Mockito.mock(HttpURLConnection.class);
+        Mockito.when(connection.getContentType()).thenReturn("text");
+        Mockito.when(connection.getInputStream())
+                .thenThrow(new IOException());
+        Mockito.when(connection.getErrorStream())
+                .thenReturn(new ByteArrayInputStream(error.getBytes(StandardCharsets.UTF_8)));
+
+        Assert.assertEquals(error, ServerInterface.readErrorFromConnection(connection));
+    }
+
+    @Test
+    public void testReadJsonError() throws IOException {
+        final String error = "Not really JSON.";
+
+        HttpURLConnection connection = Mockito.mock(HttpURLConnection.class);
+        Mockito.when(connection.getContentType()).thenReturn("application/json");
+        Mockito.when(connection.getInputStream())
+                .thenReturn(new ByteArrayInputStream(error.getBytes(StandardCharsets.UTF_8)));
+
+        Assert.assertEquals(error, ServerInterface.readErrorFromConnection(connection));
+    }
+
+    @Test
+    public void testReadErrorInvalidContentType() {
+        HttpURLConnection connection = Mockito.mock(HttpURLConnection.class);
+        Mockito.when(connection.getContentType()).thenReturn("application/NOPE");
+        Assert.assertEquals(
+                "Unexpected content type from the server: application/NOPE",
+                ServerInterface.readErrorFromConnection(connection));
+    }
+
+    @Test
+    public void testReadErrorNoStream() throws IOException {
+        HttpURLConnection connection = Mockito.mock(HttpURLConnection.class);
+        Mockito.when(connection.getContentType()).thenReturn("text");
+        Mockito.when(connection.getInputStream())
+                .thenThrow(new IOException());
+        Mockito.when(connection.getErrorStream())
+                .thenReturn(null);
+
+        Assert.assertEquals(
+                "No error data returned by server.",
+                ServerInterface.readErrorFromConnection(connection));
+    }
+
+    @Test
+    public void testReadErrorStreamThrowsException() throws IOException {
+        InputStream stream = Mockito.mock(InputStream.class);
+        Mockito.when(stream.read(Mockito.any())).thenThrow(new IOException());
+
+        HttpURLConnection connection = Mockito.mock(HttpURLConnection.class);
+        Mockito.when(connection.getContentType()).thenReturn("text");
+        Mockito.when(connection.getInputStream()).thenReturn(stream);
+
+        final String error = ServerInterface.readErrorFromConnection(connection);
+        Assert.assertTrue(
+                "Error string: '" + error + "'",
+                error.startsWith("Error reading error string from server: "));
+    }
+
+    @Test
+    public void testReadErrorEmptyStream() throws IOException {
+        HttpURLConnection connection = Mockito.mock(HttpURLConnection.class);
+        Mockito.when(connection.getContentType()).thenReturn("text");
+        Mockito.when(connection.getInputStream())
+                .thenReturn(new ByteArrayInputStream(new byte[0]));
+
+        Assert.assertEquals(
+                "No error data returned by server.",
+                ServerInterface.readErrorFromConnection(connection));
+    }
+
+    @Test
+    public void testReadErrorStreamTooLarge() throws IOException {
+        final StringBuffer sb = new StringBuffer();
+        for (int i = 0; i < 2048; ++i) {
+            sb.append(i % 100);
+        }
+        final String bigString = sb.toString();
+
+        HttpURLConnection connection = Mockito.mock(HttpURLConnection.class);
+        Mockito.when(connection.getContentType()).thenReturn("text");
+        Mockito.when(connection.getInputStream())
+                .thenReturn(new ByteArrayInputStream(bigString.getBytes(StandardCharsets.UTF_8)));
+
+        sb.setLength(1024);
+        Assert.assertEquals(sb.toString(), ServerInterface.readErrorFromConnection(connection));
     }
 }
