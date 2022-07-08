@@ -27,10 +27,13 @@ import android.util.Log;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
 import java.net.URL;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -85,6 +88,7 @@ public class ServerInterface {
                 int failures = SettingsManager.incrementFailureCounter(context);
                 Log.e(TAG, "Server connection for signing failed, response code: "
                         + con.getResponseCode() + "\nRepeated failure count: " + failures);
+                Log.e(TAG, readErrorFromConnection(con));
                 SettingsManager.consumeErrDataBudget(context, bytesTransacted);
                 RemoteProvisioningException ex =
                         RemoteProvisioningException.createFromHttpError(con.getResponseCode());
@@ -160,6 +164,7 @@ public class ServerInterface {
                     int failures = SettingsManager.incrementFailureCounter(context);
                     Log.e(TAG, "Server connection for GEEK failed, response code: "
                             + con.getResponseCode() + "\nRepeated failure count: " + failures);
+                    Log.e(TAG, readErrorFromConnection(con));
                     SettingsManager.consumeErrDataBudget(context, bytesTransacted);
                     metrics.setStatus(ProvisionerMetrics.Status.FETCH_GEEK_HTTP_ERROR);
                     throw RemoteProvisioningException.createFromHttpError(con.getResponseCode());
@@ -219,5 +224,65 @@ public class ServerInterface {
         metrics.setStatus(ProvisionerMetrics.Status.NO_NETWORK_CONNECTIVITY);
         return new RemoteProvisioningException(
                 IGenerateRkpKeyService.Status.NO_NETWORK_CONNECTIVITY, message);
+    }
+
+    /**
+     * Reads error data from the RKP server suitable for logging.
+     * @param con The HTTP connection from which to read the error
+     * @return The error string, or a description of why we couldn't read an error.
+     */
+    public static String readErrorFromConnection(HttpURLConnection con) {
+        final String contentType = con.getContentType();
+        if (!contentType.startsWith("text") && !contentType.startsWith("application/json")) {
+            return "Unexpected content type from the server: " + contentType;
+        }
+
+        InputStream inputStream = null;
+        try {
+            inputStream = con.getInputStream();
+        } catch (IOException exception) {
+            inputStream = con.getErrorStream();
+        }
+
+        if (inputStream == null) {
+            return "No error data returned by server.";
+        }
+
+        byte[] bytes;
+        try {
+            bytes = new byte[1024];
+            final int read = inputStream.read(bytes);
+            if (read <= 0) {
+                return "No error data returned by server.";
+            }
+            bytes = java.util.Arrays.copyOf(bytes, read);
+        } catch (IOException e) {
+            return "Error reading error string from server: " + e;
+        }
+
+        final Charset charset = getCharsetFromContentTypeHeader(contentType);
+        return new String(bytes, charset);
+    }
+
+    private static Charset getCharsetFromContentTypeHeader(String contentType) {
+        final String[] contentTypeParts = contentType.split(";");
+        if (contentTypeParts.length != 2) {
+            Log.w(TAG, "Simple content type; defaulting to ASCII");
+            return StandardCharsets.US_ASCII;
+        }
+
+        final String[] charsetParts = contentTypeParts[1].strip().split("=");
+        if (charsetParts.length != 2 || !charsetParts[0].equals("charset")) {
+            Log.w(TAG, "The charset is missing from content-type, defaulting to ASCII");
+            return StandardCharsets.US_ASCII;
+        }
+
+        final String charsetString = charsetParts[1].strip();
+        try {
+            return Charset.forName(charsetString);
+        } catch (IllegalArgumentException e) {
+            Log.w(TAG, "Unsupported charset: " + charsetString + "; defaulting to ASCII");
+            return StandardCharsets.US_ASCII;
+        }
     }
 }
