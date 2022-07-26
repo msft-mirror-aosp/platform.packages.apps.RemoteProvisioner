@@ -20,6 +20,7 @@ import android.content.Context;
 import android.media.DeniedByServerException;
 import android.media.MediaDrm;
 import android.media.UnsupportedSchemeException;
+import android.os.Build;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -32,6 +33,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -54,7 +56,7 @@ public class WidevineProvisioner extends Worker {
     private static final Map<String, String> REQ_PROPERTIES = new HashMap<String, String>();
     static {
         REQ_PROPERTIES.put("Accept", "*/*");
-        REQ_PROPERTIES.put("User-Agent", "Widevine CDM v1.0");
+        REQ_PROPERTIES.put("User-Agent", buildUserAgentString());
         REQ_PROPERTIES.put("Content-Type", "application/json");
         REQ_PROPERTIES.put("Connection", "close");
     }
@@ -63,6 +65,17 @@ public class WidevineProvisioner extends Worker {
 
     public WidevineProvisioner(@NonNull Context context, @NonNull WorkerParameters params) {
         super(context, params);
+    }
+
+    private static String buildUserAgentString() {
+        ArrayList<String> parts = new ArrayList();
+        parts.add("AndroidRemoteProvisioner");
+        parts.add(Build.BRAND);
+        parts.add(Build.MODEL);
+        parts.add(Build.TYPE);
+        parts.add(Build.VERSION.INCREMENTAL);
+        parts.add(Build.ID);
+        return String.join("/", parts);
     }
 
     private Result retryOrFail() {
