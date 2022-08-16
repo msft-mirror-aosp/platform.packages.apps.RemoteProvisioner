@@ -59,4 +59,24 @@ fetchEek request, along with its build fingerprint. This allows the backend to c
 options for different device models if necessary, while supporting controlled rollout of new
 changes.
 
+## Testing
+There are several test build targets defined within this repository. Each suite can be run by
+executing `atest <<name>>` from a terminal and Android checkout that is initialized with `lunch`.
+
+### [RemoteProvisionerUnitTests](/tests/unittests/Android.bp)
+These tests exercise and validate the expected functionality of the entire remote provisioning tech
+stack for the device. This suite includes full end to end tests which coordinate a provisioning step
+between the device and the backend server infrastructure.
+
+### [RemoteProvisionerRegistrationTest](2)
+This test verifies that the device has been registered with the backend server. It sends a CSR to
+the backend and waits to see if the server returns a response indicating that the device public key
+was not recognized - `HTTP Error 444`.
+
+### [RemoteProvisionerHostTests](/tests/hosttest/Android.bp)
+These tests validate behavior which requires host orchestration that would not be doable in
+`RemoteProvisionerUnitTests`. This is primarily related to validation of service behavior along
+with metrics collection.
+
 [1]: https://cs.android.com/android/platform/superproject/+/master:frameworks/base/keystore/java/android/security/IGenerateRkpKeyService.aidl
+[2]: /tests/unittests/src/com/android/remoteprovisioner/unittest/KeyRegisteredTest.java
