@@ -8,7 +8,7 @@ Provisioning (RKP) between the device and server.
 The application registers a periodic job using
 [WorkManager](https://developer.android.com/jetpack/androidx/releases/work). This job is scheduled
 to run once every ~24 hours in order to check the status of the attestation key pool and determine
-if further provisining is needed. An active network connection is set as a prerequisite for the job
+if further provisioning is needed. An active network connection is set as a prerequisite for the job
 to be executed.
 
 ### On Demand Provisioning
@@ -65,7 +65,7 @@ executing `atest <<name>>` from a terminal and Android checkout that is initiali
 
 ### [RemoteProvisionerUnitTests](/tests/unittests/Android.bp)
 These tests exercise and validate the expected functionality of the entire remote provisioning tech
-stack for the device. This suite includes full end to end tests which coordinate a provisioning step
+stack for the device. This suite includes full end-to-end tests which coordinate a provisioning step
 between the device and the backend server infrastructure.
 
 ### [RemoteProvisionerRegistrationTest](2)
@@ -77,6 +77,10 @@ was not recognized - `HTTP Error 444`.
 These tests validate behavior which requires host orchestration that would not be doable in
 `RemoteProvisionerUnitTests`. This is primarily related to validation of service behavior along
 with metrics collection.
+
+### [RemoteProvisionerPerfTests](/tests/perftests/Android.bp)
+These tests measure the round-trip performance in terms of time taken to send a certificate request
+and receive the certificates from the remote provisioning server.
 
 [1]: https://cs.android.com/android/platform/superproject/+/master:frameworks/base/keystore/java/android/security/IGenerateRkpKeyService.aidl
 [2]: /tests/unittests/src/com/android/remoteprovisioner/unittest/KeyRegisteredTest.java
