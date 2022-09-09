@@ -16,6 +16,7 @@
 
 package com.android.remoteprovisioner.unittest;
 
+import static android.hardware.security.keymint.SecurityLevel.STRONGBOX;
 import static android.hardware.security.keymint.SecurityLevel.TRUSTED_ENVIRONMENT;
 import static android.security.keystore.KeyProperties.KEY_ALGORITHM_EC;
 import static android.security.keystore.KeyProperties.PURPOSE_SIGN;
@@ -137,6 +138,7 @@ public class ServerToSystemTest {
     private static Context sContext;
     private static IRemoteProvisioning sBinder;
     private static int sCurve = 0;
+    private static ImplInfo[] sInfo;
 
     private Duration mDuration;
 
@@ -161,8 +163,9 @@ public class ServerToSystemTest {
     }
 
     private void assertPoolStatus(int total, int attested,
-                                  int unassigned, int expiring, Duration time) throws Exception {
-        AttestationPoolStatus pool = sBinder.getPoolStatus(time.toMillis(), TRUSTED_ENVIRONMENT);
+            int unassigned, int expiring, Duration time,
+            int securityLevel) throws Exception {
+        AttestationPoolStatus pool = sBinder.getPoolStatus(time.toMillis(), securityLevel);
         assertEquals(total, pool.total);
         assertEquals(attested, pool.attested);
         assertEquals(unassigned, pool.unassigned);
@@ -187,16 +190,49 @@ public class ServerToSystemTest {
         return certs;
     }
 
+    private void testFullRoundTrip(int securityLevel) throws Exception {
+        ProvisionerMetrics metrics = ProvisionerMetrics.createScheduledAttemptMetrics(sContext);
+        int numTestKeys = 1;
+        int sCurve = 0;
+        for (int i = 0; i < sInfo.length; i++) {
+            if (sInfo[i].secLevel == securityLevel) {
+                sCurve = sInfo[i].supportedCurve;
+                break;
+            }
+        }
+        Assume.assumeFalse(
+                "Skipping this test as there is no implementation for the provided security level: "
+                        + securityLevel,
+                (sCurve == 0));
+        assertPoolStatus(0, 0, 0, 0, mDuration, securityLevel);
+        sBinder.generateKeyPair(IS_TEST_MODE, securityLevel);
+        assertPoolStatus(numTestKeys, 0, 0, 0, mDuration, securityLevel);
+        GeekResponse geek = ServerInterface.fetchGeek(sContext, metrics);
+        assertEquals(0, SettingsManager.getErrDataBudgetConsumed(sContext));
+        assertNotNull(geek);
+        int numProvisioned =
+                Provisioner.provisionCerts(numTestKeys, securityLevel,
+                        geek.getGeekChain(sCurve), geek.getChallenge(), sBinder,
+                        sContext, metrics);
+        assertEquals(0, SettingsManager.getErrDataBudgetConsumed(sContext));
+        assertEquals(numTestKeys, numProvisioned);
+        assertPoolStatus(numTestKeys, numTestKeys, numTestKeys, 0, mDuration, securityLevel);
+        // Certificate duration sent back from the server may change, however ~6 months should be
+        // pretty safe.
+        assertPoolStatus(numTestKeys, numTestKeys, numTestKeys,
+                numTestKeys, mDuration.plusDays(180), securityLevel);
+    }
+
     @BeforeClass
     public static void init() throws Exception {
         sContext = ApplicationProvider.getApplicationContext();
         sBinder =
-              IRemoteProvisioning.Stub.asInterface(ServiceManager.getService(SERVICE));
+                IRemoteProvisioning.Stub.asInterface(ServiceManager.getService(SERVICE));
         assertNotNull(sBinder);
-        ImplInfo[] info = sBinder.getImplementationInfo();
-        for (int i = 0; i < info.length; i++) {
-            if (info[i].secLevel == TRUSTED_ENVIRONMENT) {
-                sCurve = info[i].supportedCurve;
+        sInfo = sBinder.getImplementationInfo();
+        for (int i = 0; i < sInfo.length; i++) {
+            if (sInfo[i].secLevel == TRUSTED_ENVIRONMENT) {
+                sCurve = sInfo[i].supportedCurve;
                 break;
             }
         }
@@ -216,26 +252,13 @@ public class ServerToSystemTest {
     }
 
     @Test
-    public void testFullRoundTrip() throws Exception {
-        ProvisionerMetrics metrics = ProvisionerMetrics.createScheduledAttemptMetrics(sContext);
-        int numTestKeys = 1;
-        assertPoolStatus(0, 0, 0, 0, mDuration);
-        sBinder.generateKeyPair(IS_TEST_MODE, TRUSTED_ENVIRONMENT);
-        assertPoolStatus(numTestKeys, 0, 0, 0, mDuration);
-        GeekResponse geek = ServerInterface.fetchGeek(sContext, metrics);
-        assertEquals(0, SettingsManager.getErrDataBudgetConsumed(sContext));
-        assertNotNull(geek);
-        int numProvisioned =
-                Provisioner.provisionCerts(numTestKeys, TRUSTED_ENVIRONMENT,
-                                           geek.getGeekChain(sCurve), geek.getChallenge(), sBinder,
-                                           sContext, metrics);
-        assertEquals(0, SettingsManager.getErrDataBudgetConsumed(sContext));
-        assertEquals(numTestKeys, numProvisioned);
-        assertPoolStatus(numTestKeys, numTestKeys, numTestKeys, 0, mDuration);
-        // Certificate duration sent back from the server may change, however ~6 months should be
-        // pretty safe.
-        assertPoolStatus(numTestKeys, numTestKeys, numTestKeys,
-                         numTestKeys, mDuration.plusDays(180));
+    public void testFullRoundTripTee() throws Exception {
+        testFullRoundTrip(TRUSTED_ENVIRONMENT);
+    }
+
+    @Test
+    public void testFullRoundTripStrongbox() throws Exception {
+        testFullRoundTrip(STRONGBOX);
     }
 
     @Test
@@ -245,12 +268,14 @@ public class ServerToSystemTest {
                 PeriodicProvisioner.class,
                 Executors.newSingleThreadExecutor()).build();
         assertEquals(provisioner.doWork(), ListenableWorker.Result.success());
-        AttestationPoolStatus pool = sBinder.getPoolStatus(mDuration.toMillis(),
-                TRUSTED_ENVIRONMENT);
-        assertTrue("Pool must not be empty", pool.total > 0);
-        assertEquals("All keys must be attested", pool.total, pool.attested);
-        assertEquals("Nobody should have consumed keys yet", pool.total, pool.unassigned);
-        assertEquals("All keys should be freshly generated", 0, pool.expiring);
+        for (int i = 0; i < sInfo.length; i++) {
+            AttestationPoolStatus pool = sBinder.getPoolStatus(mDuration.toMillis(),
+                    sInfo[i].secLevel);
+            assertTrue("Pool must not be empty", pool.total > 0);
+            assertEquals("All keys must be attested", pool.total, pool.attested);
+            assertEquals("Nobody should have consumed keys yet", pool.total, pool.unassigned);
+            assertEquals("All keys should be freshly generated", 0, pool.expiring);
+        }
     }
 
     @Test
@@ -262,17 +287,25 @@ public class ServerToSystemTest {
                 PeriodicProvisioner.class,
                 Executors.newSingleThreadExecutor()).build();
         assertEquals(provisioner.doWork(), ListenableWorker.Result.success());
-        final AttestationPoolStatus pool = sBinder.getPoolStatus(mDuration.toMillis(),
-                TRUSTED_ENVIRONMENT);
-        assertTrue("Pool must not be empty", pool.total > 0);
-        assertEquals("All keys must be attested", pool.total, pool.attested);
-        assertEquals("Nobody should have consumed keys yet", pool.total, pool.unassigned);
-        assertEquals("All keys should be freshly generated", 0, pool.expiring);
+        AttestationPoolStatus[] pools = new AttestationPoolStatus[sInfo.length];
+        for (int i = 0; i < sInfo.length; i++) {
+            pools[i] = sBinder.getPoolStatus(mDuration.toMillis(),
+                    sInfo[i].secLevel);
+            assertTrue("Pool must not be empty", pools[i].total > 0);
+            assertEquals("All keys must be attested", pools[i].total, pools[i].attested);
+            assertEquals("Nobody should have consumed keys yet", pools[i].total,
+                    pools[i].unassigned);
+            assertEquals("All keys should be freshly generated", 0, pools[i].expiring);
+        }
 
         // The metrics host test will perform additional validation by ensuring correct metrics
         // are recorded.
         assertEquals(provisioner.doWork(), ListenableWorker.Result.success());
-        assertPoolStatus(pool.total, pool.attested, pool.unassigned, pool.expiring, mDuration);
+        for (int i = 0; i < pools.length; i++) {
+            assertPoolStatus(pools[i].total, pools[i].attested, pools[i].unassigned,
+                    pools[i].expiring, mDuration,
+                    sInfo[i].secLevel);
+        }
     }
 
     @Test
@@ -286,12 +319,14 @@ public class ServerToSystemTest {
                 PeriodicProvisioner.class,
                 Executors.newSingleThreadExecutor()).build();
         assertEquals(provisioner.doWork(), ListenableWorker.Result.failure());
-        AttestationPoolStatus pool = sBinder.getPoolStatus(mDuration.toMillis(),
-                TRUSTED_ENVIRONMENT);
-        assertTrue("Keys should have been generated", pool.total > 0);
-        assertEquals("No keys should be attested", 0, pool.attested);
-        assertEquals("No keys should have been assigned", 0, pool.unassigned);
-        assertEquals("No keys can possibly be expiring yet", 0, pool.expiring);
+        for (int i = 0; i < sInfo.length; i++) {
+            AttestationPoolStatus pool = sBinder.getPoolStatus(mDuration.toMillis(),
+                    sInfo[i].secLevel);
+            assertTrue("Keys should have been generated", pool.total > 0);
+            assertEquals("No keys should be attested", 0, pool.attested);
+            assertEquals("No keys should have been assigned", 0, pool.unassigned);
+            assertEquals("No keys can possibly be expiring yet", 0, pool.expiring);
+        }
     }
 
     @Test
@@ -331,7 +366,9 @@ public class ServerToSystemTest {
                 PeriodicProvisioner.class,
                 Executors.newSingleThreadExecutor()).build();
         assertEquals(provisioner.doWork(), ListenableWorker.Result.success());
-        assertPoolStatus(0, 0, 0, 0, mDuration);
+        for (int i = 0; i < sInfo.length; i++) {
+            assertPoolStatus(0, 0, 0, 0, mDuration, sInfo[i].secLevel);
+        }
     }
 
     @Test
@@ -345,7 +382,7 @@ public class ServerToSystemTest {
         SettingsManager.setDeviceConfig(sContext, 1 /* extraKeys */, mDuration /* expiringBy */,
                                         "Not even a URL" /* url */);
         int numTestKeys = 1;
-        assertPoolStatus(0, 0, 0, 0, mDuration);
+        assertPoolStatus(0, 0, 0, 0, mDuration, TRUSTED_ENVIRONMENT);
         // Note that due to the GenerateRkpKeyService, this call to generate an attested key will
         // still cause the service to generate keys up the number specified as `extraKeys` in the
         // `setDeviceConfig`. This will provide us 1 key for the followup call to provisionCerts.
@@ -358,7 +395,7 @@ public class ServerToSystemTest {
                                            geek.getGeekChain(sCurve), geek.getChallenge(), sBinder,
                                            sContext, metrics);
         assertEquals(numTestKeys, numProvisioned);
-        assertPoolStatus(numTestKeys, numTestKeys, numTestKeys, 0, mDuration);
+        assertPoolStatus(numTestKeys, numTestKeys, numTestKeys, 0, mDuration, TRUSTED_ENVIRONMENT);
         Certificate[] provisionedKeyCerts = generateKeyStoreKey("test2");
         sBinder.deleteAllKeys();
         sBinder.generateKeyPair(IS_TEST_MODE, TRUSTED_ENVIRONMENT);
@@ -472,7 +509,7 @@ public class ServerToSystemTest {
     public void testRetryWithoutNetworkTee() throws Exception {
         setAirplaneMode(true);
         try (ForceRkpOnlyContext c = new ForceRkpOnlyContext()) {
-            assertPoolStatus(0, 0, 0, 0, mDuration);
+            assertPoolStatus(0, 0, 0, 0, mDuration, TRUSTED_ENVIRONMENT);
             generateKeyStoreKey("should-never-succeed");
             Assert.fail("Expected a keystore exception");
         } catch (ProviderException e) {
@@ -534,7 +571,7 @@ public class ServerToSystemTest {
                 "http://localhost:" + server.getListeningPort() + "/");
 
         try (ForceRkpOnlyContext c = new ForceRkpOnlyContext()) {
-            assertPoolStatus(0, 0, 0, 0, mDuration);
+            assertPoolStatus(0, 0, 0, 0, mDuration, TRUSTED_ENVIRONMENT);
             generateKeyStoreKey("should-never-succeed");
             Assert.fail("Expected a keystore exception");
         } catch (ProviderException e) {
