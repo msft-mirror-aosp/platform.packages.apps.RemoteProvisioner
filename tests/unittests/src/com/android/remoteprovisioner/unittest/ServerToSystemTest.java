@@ -22,6 +22,8 @@ import static android.security.keystore.KeyProperties.KEY_ALGORITHM_EC;
 import static android.security.keystore.KeyProperties.PURPOSE_SIGN;
 import static android.security.keystore.KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT;
 
+import static com.google.common.truth.Truth.assertThat;
+
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -271,9 +273,9 @@ public class ServerToSystemTest {
         for (int i = 0; i < sInfo.length; i++) {
             AttestationPoolStatus pool = sBinder.getPoolStatus(mDuration.toMillis(),
                     sInfo[i].secLevel);
-            assertTrue("Pool must not be empty", pool.total > 0);
+            assertThat(pool.total).isGreaterThan(0);
             assertEquals("All keys must be attested", pool.total, pool.attested);
-            assertEquals("Nobody should have consumed keys yet", pool.total, pool.unassigned);
+            assertThat(pool.total).isAtLeast(pool.unassigned);
             assertEquals("All keys should be freshly generated", 0, pool.expiring);
         }
     }
@@ -291,10 +293,9 @@ public class ServerToSystemTest {
         for (int i = 0; i < sInfo.length; i++) {
             pools[i] = sBinder.getPoolStatus(mDuration.toMillis(),
                     sInfo[i].secLevel);
-            assertTrue("Pool must not be empty", pools[i].total > 0);
+            assertThat(pools[i].total).isGreaterThan(0);
             assertEquals("All keys must be attested", pools[i].total, pools[i].attested);
-            assertEquals("Nobody should have consumed keys yet", pools[i].total,
-                    pools[i].unassigned);
+            assertThat(pools[i].total).isAtLeast(pools[i].unassigned);
             assertEquals("All keys should be freshly generated", 0, pools[i].expiring);
         }
 
