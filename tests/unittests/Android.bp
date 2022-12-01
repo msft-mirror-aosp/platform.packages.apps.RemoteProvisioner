@@ -32,6 +32,7 @@ android_test {
         "ub-uiautomator",
         "cbor-java",
         "tink-prebuilt",
+        "truth-prebuilt",
         "bouncycastle-unbundled",
     ],
     platform_apis: true,
