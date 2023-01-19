@@ -24,12 +24,15 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import android.os.SystemProperties;
 import android.platform.test.annotations.Presubmit;
 
 import androidx.test.runner.AndroidJUnit4;
 
 import com.android.remoteprovisioner.X509Utils;
 
+import org.junit.Assume;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -39,6 +42,11 @@ import java.security.cert.X509Certificate;
 
 @RunWith(AndroidJUnit4.class)
 public class X509UtilsTest {
+    @Before
+    public void setUp() {
+        Assume.assumeFalse(SystemProperties.getBoolean(
+                "persist.device_config.remote_key_provisioning_native.enable_rkpd", false));
+    }
 
     @Presubmit
     @Test
