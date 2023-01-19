@@ -34,6 +34,7 @@ import android.hardware.security.keymint.DeviceInfo;
 import android.hardware.security.keymint.ProtectedData;
 import android.hardware.security.keymint.SecurityLevel;
 import android.os.ServiceManager;
+import android.os.SystemProperties;
 import android.platform.test.annotations.Presubmit;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.remoteprovisioning.IRemoteProvisioning;
@@ -53,6 +54,7 @@ import com.google.crypto.tink.subtle.X25519;
 
 import org.junit.After;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -101,6 +103,8 @@ public class SystemInterfaceTest {
     public void setUp() throws Exception {
         mBinder =
               IRemoteProvisioning.Stub.asInterface(ServiceManager.getService(SERVICE));
+        Assume.assumeFalse(SystemProperties.getBoolean(
+                "persist.device_config.remote_key_provisioning_native.enable_rkpd", false));
         assertNotNull(mBinder);
         mInfo = mBinder.getImplementationInfo();
         mBinder.deleteAllKeys();
