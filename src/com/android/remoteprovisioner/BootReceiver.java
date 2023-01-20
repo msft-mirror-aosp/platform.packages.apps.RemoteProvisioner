@@ -24,8 +24,8 @@ import android.content.Intent;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.security.remoteprovisioning.AttestationPoolStatus;
-import android.security.remoteprovisioning.ImplInfo;
 import android.security.remoteprovisioning.IRemoteProvisioning;
+import android.security.remoteprovisioning.ImplInfo;
 import android.util.Log;
 
 import androidx.work.Constraints;
@@ -80,14 +80,13 @@ public class BootReceiver extends BroadcastReceiver {
                 .enqueueUniquePeriodicWork("ProvisioningJob",
                                        ExistingPeriodicWorkPolicy.REPLACE, // Replace on reboot.
                                        workRequest);
-        if (WidevineProvisioner.isWidevineProvisioningNeeded()) {
-            Log.i(TAG, "WV provisioning needed. Queueing a one-time provisioning job.");
-            OneTimeWorkRequest wvRequest =
-                    new OneTimeWorkRequest.Builder(WidevineProvisioner.class)
-                            .setConstraints(constraints)
-                            .build();
-            WorkManager.getInstance(context).enqueue(wvRequest);
-        }
+
+        Log.i(TAG, "Queueing a one-time provisioning job for widevine provisioning.");
+        OneTimeWorkRequest wvRequest =
+                new OneTimeWorkRequest.Builder(WidevineProvisioner.class)
+                        .setConstraints(constraints)
+                        .build();
+        WorkManager.getInstance(context).enqueue(wvRequest);
     }
 
 
