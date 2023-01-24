@@ -244,6 +244,7 @@ public class ServerToSystemTest {
     public void setUp() throws Exception {
         Assume.assumeFalse(SystemProperties.getBoolean(
                 "persist.device_config.remote_key_provisioning_native.enable_rkpd", false));
+        Assume.assumeFalse(SystemProperties.getBoolean("remote_provisioning.enable_rkpd", false));
         SettingsManager.clearPreferences(sContext);
         sBinder.deleteAllKeys();
         mDuration = Duration.ofMillis(System.currentTimeMillis());
