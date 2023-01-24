@@ -105,6 +105,7 @@ public class SystemInterfaceTest {
               IRemoteProvisioning.Stub.asInterface(ServiceManager.getService(SERVICE));
         Assume.assumeFalse(SystemProperties.getBoolean(
                 "persist.device_config.remote_key_provisioning_native.enable_rkpd", false));
+        Assume.assumeFalse(SystemProperties.getBoolean("remote_provisioning.enable_rkpd", false));
         assertNotNull(mBinder);
         mInfo = mBinder.getImplementationInfo();
         mBinder.deleteAllKeys();
