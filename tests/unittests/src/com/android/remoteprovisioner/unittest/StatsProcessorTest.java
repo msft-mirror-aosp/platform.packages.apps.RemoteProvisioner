@@ -20,6 +20,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import android.os.SystemProperties;
 import android.platform.test.annotations.Presubmit;
 import android.security.remoteprovisioning.AttestationPoolStatus;
 
@@ -27,6 +28,7 @@ import androidx.test.runner.AndroidJUnit4;
 
 import com.android.remoteprovisioner.StatsProcessor;
 
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -39,6 +41,9 @@ public class StatsProcessorTest {
 
     @Before
     public void setUp() {
+        Assume.assumeFalse(SystemProperties.getBoolean(
+                "persist.device_config.remote_key_provisioning_native.enable_rkpd", false));
+        Assume.assumeFalse(SystemProperties.getBoolean("remote_provisioning.enable_rkpd", false));
         mNumExtraKeys = 0;
         mPool.expiring = 0;
         mPool.unassigned = 0;

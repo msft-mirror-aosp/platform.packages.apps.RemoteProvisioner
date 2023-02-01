@@ -16,6 +16,7 @@
 
 package com.android.remoteprovisioner.unittest;
 
+import android.os.SystemProperties;
 import android.platform.test.annotations.Presubmit;
 import android.security.IGenerateRkpKeyService.Status;
 
@@ -24,11 +25,20 @@ import androidx.test.runner.AndroidJUnit4;
 import com.android.remoteprovisioner.RemoteProvisioningException;
 
 import org.junit.Assert;
+import org.junit.Assume;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 @RunWith(AndroidJUnit4.class)
 public class RemoteProvisioningExceptionTest {
+    @Before
+    public void setUp() {
+        Assume.assumeFalse(SystemProperties.getBoolean(
+                "persist.device_config.remote_key_provisioning_native.enable_rkpd", false));
+        Assume.assumeFalse(SystemProperties.getBoolean("remote_provisioning.enable_rkpd", false));
+    }
+
     @Presubmit
     @Test
     public void handlesArbitraryErrors() {

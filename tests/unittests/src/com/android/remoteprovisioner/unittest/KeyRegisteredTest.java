@@ -28,6 +28,7 @@ import android.hardware.security.keymint.DeviceInfo;
 import android.hardware.security.keymint.ProtectedData;
 import android.os.Build;
 import android.os.ServiceManager;
+import android.os.SystemProperties;
 import android.security.IGenerateRkpKeyService.Status;
 import android.security.remoteprovisioning.IRemoteProvisioning;
 import android.security.remoteprovisioning.ImplInfo;
@@ -44,6 +45,7 @@ import com.android.remoteprovisioner.SettingsManager;
 import com.android.remoteprovisioner.SystemInterface;
 
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -89,6 +91,9 @@ public class KeyRegisteredTest {
 
     @Before
     public void setUp() throws Exception {
+        Assume.assumeFalse(SystemProperties.getBoolean(
+                "persist.device_config.remote_key_provisioning_native.enable_rkpd", false));
+        Assume.assumeFalse(SystemProperties.getBoolean("remote_provisioning.enable_rkpd", false));
         sBinder.deleteAllKeys();
     }
 

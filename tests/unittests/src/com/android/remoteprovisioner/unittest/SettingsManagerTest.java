@@ -21,6 +21,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.os.SystemProperties;
 
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.runner.AndroidJUnit4;
@@ -28,6 +29,7 @@ import androidx.test.runner.AndroidJUnit4;
 import com.android.remoteprovisioner.SettingsManager;
 
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -48,6 +50,9 @@ public class SettingsManagerTest {
 
     @Before
     public void setUp() {
+        Assume.assumeFalse(SystemProperties.getBoolean(
+                "persist.device_config.remote_key_provisioning_native.enable_rkpd", false));
+        Assume.assumeFalse(SystemProperties.getBoolean("remote_provisioning.enable_rkpd", false));
         SettingsManager.clearPreferences(sContext);
     }
 
