@@ -34,7 +34,9 @@ import static org.junit.Assert.fail;
 import android.Manifest;
 import android.app.ActivityThread;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
+import android.net.EthernetManager;
 import android.net.NetworkInfo;
 import android.os.ServiceManager;
 import android.os.SystemProperties;
@@ -515,8 +517,23 @@ public class ServerToSystemTest {
         Assert.fail("Failed to successfully " + (enable ? "enable" : "disable") + " airplane mode");
     }
 
+    private void setEthernetEnabled(boolean enable) throws Exception {
+        // Whether the device running these tests supports ethernet.
+        EthernetManager mEthernetManager = sContext.getSystemService(EthernetManager.class);
+        boolean mHasEthernet = sContext.getPackageManager()
+                .hasSystemFeature(PackageManager.FEATURE_ETHERNET);
+        if (mHasEthernet) {
+            try (PermissionContext c = TestApis.permissions().withPermission(
+                    Manifest.permission.NETWORK_SETTINGS)) {
+                // Enable/Disable the ethernet as it can not be controlled by airplane mode.
+                mEthernetManager.setEthernetEnabled(enable);
+            }
+        }
+    }
+
     @Test
     public void testRetryWithoutNetworkTee() throws Exception {
+        setEthernetEnabled(false);
         setAirplaneMode(true);
         try (ForceRkpOnlyContext c = new ForceRkpOnlyContext()) {
             assertPoolStatus(0, 0, 0, 0, mDuration, TRUSTED_ENVIRONMENT);
@@ -530,6 +547,7 @@ public class ServerToSystemTest {
             Assert.assertEquals(KeyStoreException.RETRY_WHEN_CONNECTIVITY_AVAILABLE,
                     keyStoreException.getRetryPolicy());
         } finally {
+            setEthernetEnabled(true);
             setAirplaneMode(false);
         }
     }
