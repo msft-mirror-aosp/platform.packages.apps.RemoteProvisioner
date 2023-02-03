@@ -63,6 +63,7 @@ import com.android.remoteprovisioner.ProvisionerMetrics;
 import com.android.remoteprovisioner.RemoteProvisioningException;
 import com.android.remoteprovisioner.ServerInterface;
 import com.android.remoteprovisioner.SettingsManager;
+import com.android.remoteprovisioner.X509Utils;
 
 import org.junit.After;
 import org.junit.Assert;
@@ -82,6 +83,7 @@ import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.ProviderException;
 import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.Executors;
@@ -188,6 +190,10 @@ public class ServerToSystemTest {
         keyPairGenerator.initialize(spec);
         keyPairGenerator.generateKeyPair();
         Certificate[] certs = keyStore.getCertificateChain(spec.getKeystoreAlias());
+        X509Certificate[] x509Certificates = Arrays.stream(certs)
+                .map(x -> (X509Certificate) x)
+                .toArray(X509Certificate[]::new);
+        assertThat(X509Utils.isCertChainValid(x509Certificates)).isTrue();
         keyStore.deleteEntry(alias);
         return certs;
     }

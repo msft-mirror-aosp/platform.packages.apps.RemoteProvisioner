@@ -22,8 +22,12 @@ import android.hardware.security.keymint.DeviceInfo;
 import android.hardware.security.keymint.ProtectedData;
 import android.security.IGenerateRkpKeyService;
 import android.security.remoteprovisioning.IRemoteProvisioning;
+import android.util.Base64;
 import android.util.Log;
 
+import java.security.InvalidAlgorithmParameterException;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
@@ -131,7 +135,10 @@ public class Provisioner {
             X509Certificate cert;
             try {
                 cert = X509Utils.formatX509Certs(certChain)[0];
-            } catch (CertificateException e) {
+            } catch (CertificateException | NoSuchAlgorithmException | NoSuchProviderException
+                    | InvalidAlgorithmParameterException e) {
+                Log.e(TAG, "Unable to parse certificate chain: "
+                        + Base64.encodeToString(certChain, Base64.DEFAULT), e);
                 throw new RemoteProvisioningException(IGenerateRkpKeyService.Status.INTERNAL_ERROR,
                         "Failed to interpret DER encoded certificate chain", e);
             }
