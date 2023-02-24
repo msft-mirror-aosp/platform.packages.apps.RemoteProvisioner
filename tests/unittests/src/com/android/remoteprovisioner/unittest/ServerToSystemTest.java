@@ -34,7 +34,9 @@ import static org.junit.Assert.fail;
 import android.Manifest;
 import android.app.ActivityThread;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
+import android.net.EthernetManager;
 import android.net.NetworkInfo;
 import android.os.ServiceManager;
 import android.os.SystemProperties;
@@ -63,6 +65,7 @@ import com.android.remoteprovisioner.ProvisionerMetrics;
 import com.android.remoteprovisioner.RemoteProvisioningException;
 import com.android.remoteprovisioner.ServerInterface;
 import com.android.remoteprovisioner.SettingsManager;
+import com.android.remoteprovisioner.X509Utils;
 
 import org.junit.After;
 import org.junit.Assert;
@@ -82,6 +85,7 @@ import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.ProviderException;
 import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.Executors;
@@ -188,6 +192,10 @@ public class ServerToSystemTest {
         keyPairGenerator.initialize(spec);
         keyPairGenerator.generateKeyPair();
         Certificate[] certs = keyStore.getCertificateChain(spec.getKeystoreAlias());
+        X509Certificate[] x509Certificates = Arrays.stream(certs)
+                .map(x -> (X509Certificate) x)
+                .toArray(X509Certificate[]::new);
+        assertThat(X509Utils.isCertChainValid(x509Certificates)).isTrue();
         keyStore.deleteEntry(alias);
         return certs;
     }
@@ -242,6 +250,9 @@ public class ServerToSystemTest {
 
     @Before
     public void setUp() throws Exception {
+        Assume.assumeFalse(SystemProperties.getBoolean(
+                "persist.device_config.remote_key_provisioning_native.enable_rkpd", false));
+        Assume.assumeFalse(SystemProperties.getBoolean("remote_provisioning.enable_rkpd", false));
         SettingsManager.clearPreferences(sContext);
         sBinder.deleteAllKeys();
         mDuration = Duration.ofMillis(System.currentTimeMillis());
@@ -506,8 +517,23 @@ public class ServerToSystemTest {
         Assert.fail("Failed to successfully " + (enable ? "enable" : "disable") + " airplane mode");
     }
 
+    private void setEthernetEnabled(boolean enable) throws Exception {
+        // Whether the device running these tests supports ethernet.
+        EthernetManager mEthernetManager = sContext.getSystemService(EthernetManager.class);
+        boolean mHasEthernet = sContext.getPackageManager()
+                .hasSystemFeature(PackageManager.FEATURE_ETHERNET);
+        if (mHasEthernet) {
+            try (PermissionContext c = TestApis.permissions().withPermission(
+                    Manifest.permission.NETWORK_SETTINGS)) {
+                // Enable/Disable the ethernet as it can not be controlled by airplane mode.
+                mEthernetManager.setEthernetEnabled(enable);
+            }
+        }
+    }
+
     @Test
     public void testRetryWithoutNetworkTee() throws Exception {
+        setEthernetEnabled(false);
         setAirplaneMode(true);
         try (ForceRkpOnlyContext c = new ForceRkpOnlyContext()) {
             assertPoolStatus(0, 0, 0, 0, mDuration, TRUSTED_ENVIRONMENT);
@@ -521,6 +547,7 @@ public class ServerToSystemTest {
             Assert.assertEquals(KeyStoreException.RETRY_WHEN_CONNECTIVITY_AVAILABLE,
                     keyStoreException.getRetryPolicy());
         } finally {
+            setEthernetEnabled(true);
             setAirplaneMode(false);
         }
     }
