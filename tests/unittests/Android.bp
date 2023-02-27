@@ -29,7 +29,6 @@ android_test {
         "libnanohttpd",
         "mockito-target-extended-minus-junit4",
         "platform-test-annotations",
-        "ub-uiautomator",
         "cbor-java",
         "tink-prebuilt",
         "truth-prebuilt",
